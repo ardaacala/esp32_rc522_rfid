@@ -69,16 +69,16 @@ Yazma sonrası üç blok geri okunur ve 48 byte'ın tümü karşılaştırılır
 
 Her yazma denemesinden hemen önce etiketin 4, 5 ve 6 numaralı blokları okunur. Okuma başarısızsa güvenlik için yazma yapılmaz. Etiketteki `TAG1` metni, yazılacak metinle veya bu çalışmada en son başarıyla yazılmış metinle aynıysa etiket atlanır. Atlanan etiket hedef sayıya eklenmez. Böylece mekanik besleyici daha önce işlenmiş bir etiketi yeniden antene getirse bile içerik değiştirilmez. Farklı içerikli etiketler normal yazma akışına devam eder.
 
-## Wi-Fi konsolu ve OTA
+## ESP'nin kendi Wi-Fi ağı, ağ konsolu ve OTA
 
-1. [`include/wifi_config.h.example`](include/wifi_config.h.example) dosyasını `include/wifi_config.h` adıyla kopyalayın. Wi-Fi adını, parolasını ve güçlü bir OTA parolasını girin. Bu yerel dosya Git tarafından yok sayılır.
-2. İlk yüklemeyi USB üzerinden yapın. Açılışta USB seri monitörü (115200 baud) ESP'nin IP adresini gösterir. Wi-Fi veya OTA parolası ayarlanmamışsa ağ özellikleri kapalı kalır; USB seri monitörü çalışır.
-3. Aynı yerel ağdaki bir TCP terminaliyle ESP'nin IP adresinde **2323** portuna bağlanın. Örneğin `telnet ESP_IP 2323` veya `nc ESP_IP 2323`. USB'deki `help`, `read`, `write ADET METIN` ve `cancel` komutları burada da çalışır; çıktı iki konsola birden gönderilir. Aynı anda bir ağ istemcisi kabul edilir. Ağ konsolu şifreli değildir; güvenilir yerel ağda kullanın.
-4. Sonraki yüklemeler için PowerShell'de OTA parolasını oturum değişkenine atayıp ESP'nin IP adresini verin:
+ESP açıldığında **RFID_RC522** adlı şifresiz Wi-Fi ağını yayınlar. Telefonu veya bilgisayarı bu ağa bağlayın. Ağın internet sağlamaması normaldir. ESP'nin IP adresi USB seri monitöründe (115200 baud) yazılır; varsayılan SoftAP adresi **192.168.4.1**'dir.
 
-   ```powershell
-   $env:RFID_OTA_PASSWORD = 'wifi_config.h içindeki OTA parolası'
-   & "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe" run -e esp32dev_ota -t upload --upload-port ESP_IP
-   ```
+Bir TCP terminaliyle `telnet 192.168.4.1 2323` veya `nc 192.168.4.1 2323` komutunu kullanarak ağ konsoluna bağlanın. USB'deki `help`, `read`, `write ADET METIN` ve `cancel` komutları burada da çalışır; çıktı iki konsola birden gönderilir. Aynı anda bir ağ istemcisi kabul edilir.
 
-OTA, [PlatformIO'nun ESP32 `espota` yükleyicisini](https://docs.platformio.org/en/latest/platforms/espressif32.html) ve varsayılan **3232** portunu kullanır. OTA başlarken bekleyen RFID işlemi iptal edilir. Kartın IP adresi değişirse yeni IP'yi USB konsolundan veya yönlendiriciden alın. Parolayı değiştirdikten sonra ilk yeni sürümü mevcut parolayla yükleyin; sonraki yüklemelerde yeni parolayı kullanın.
+İlk firmware yüklemesini USB üzerinden yapın. Daha sonraki yüklemelerde bilgisayar **RFID_RC522** ağına bağlıyken OTA kullanın:
+
+```powershell
+& "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe" run -e esp32dev_ota -t upload --upload-port 192.168.4.1
+```
+
+OTA, [PlatformIO'nun ESP32 `espota` yükleyicisini](https://docs.platformio.org/en/latest/platforms/espressif32.html) ve varsayılan **3232** portunu kullanır. OTA başlarken bekleyen RFID işlemi iptal edilir. Wi-Fi ağı, ağ konsolu ve OTA şifresizdir; ağın kapsama alanındaki kişiler erişebilir.

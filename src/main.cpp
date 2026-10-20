@@ -5,14 +5,6 @@
 #include <ArduinoOTA.h>
 #include <cstring>
 
-#if __has_include("wifi_config.h")
-#include "wifi_config.h"
-#else
-#define RFID_WIFI_SSID ""
-#define RFID_WIFI_PASSWORD ""
-#define RFID_OTA_PASSWORD ""
-#endif
-
 // USB and the single TCP client share the same commands and output.
 class ConsolePort : public Stream {
  public:
@@ -61,6 +53,7 @@ constexpr unsigned long CARD_POLL_MS = 50;
 constexpr unsigned long READER_PROBE_MS = 1000;
 constexpr unsigned long SAME_CARD_GAP_MS = 700;
 constexpr unsigned long WIFI_RETRY_MS = 10000;
+constexpr char AP_SSID[] = "RFID_RC522";
 constexpr uint16_t CONSOLE_PORT = 2323;
 
 MFRC522 reader(PIN_SS, PIN_RST);
@@ -85,6 +78,7 @@ uint8_t lastWrittenText[MAX_TEXT_BYTES];
 uint8_t lastWrittenLength = 0;
 bool hasLastWrittenText = false;
 unsigned long lastWifiAttempt = 0;
+bool apReady = false;
 bool networkStarted = false;
 bool waitForCardRemoval = false;
 uint8_t lastUid[10];
@@ -410,23 +404,16 @@ bool writeText() {
 }
 
 void pollNetwork() {
-  if (RFID_WIFI_SSID[0] == '\0' || RFID_OTA_PASSWORD[0] == '\0') return;
   const unsigned long now = millis();
-  if (WiFi.status() != WL_CONNECTED) {
-    if (networkStarted) {
-      console.dropClient();
-      networkStarted = false;
-    }
-    if (now - lastWifiAttempt >= WIFI_RETRY_MS) {
-      lastWifiAttempt = now;
-      WiFi.begin(RFID_WIFI_SSID, RFID_WIFI_PASSWORD);
-    }
-    return;
+  if (!apReady) {
+    if (now - lastWifiAttempt < WIFI_RETRY_MS) return;
+    lastWifiAttempt = now;
+    apReady = WiFi.softAP(AP_SSID);
+    if (!apReady) return;
   }
   if (!networkStarted) {
     networkConsole.begin();
     ArduinoOTA.setHostname("rfid-rc522");
-    ArduinoOTA.setPassword(RFID_OTA_PASSWORD);
     ArduinoOTA.onStart([]() {
       pending = PendingOperation::None;
       waitForCardRemoval = false;
@@ -434,8 +421,10 @@ void pollNetwork() {
     });
     ArduinoOTA.begin();
     networkStarted = true;
-    console.print(F("Wi-Fi hazır. IP: "));
-    console.println(WiFi.localIP());
+    console.print(F("Şifresiz Wi-Fi ağı: "));
+    console.println(AP_SSID);
+    console.print(F("ESP IP: "));
+    console.println(WiFi.softAPIP());
     console.println(F("Ağ konsolu: TCP 2323; OTA: TCP 3232."));
   }
   ArduinoOTA.handle();
@@ -553,14 +542,10 @@ void pollReader() {
 
 void setup() {
   console.begin(115200);
-  if (RFID_WIFI_SSID[0] != '\0' && RFID_OTA_PASSWORD[0] != '\0') {
-    WiFi.mode(WIFI_STA);
-    WiFi.setAutoReconnect(true);
-    WiFi.begin(RFID_WIFI_SSID, RFID_WIFI_PASSWORD);
-    lastWifiAttempt = millis();
-  } else {
-    console.println(F("Wi-Fi/OTA kapalı: wifi_config.h içinde SSID ve OTA parolası ayarlayın."));
-  }
+  WiFi.mode(WIFI_AP);
+  apReady = WiFi.softAP(AP_SSID);
+  lastWifiAttempt = millis();
+  if (!apReady) console.println(F("Wi-Fi ağı başlatılamadı; yeniden denenecek."));
   SPI.begin(18, 19, 23, PIN_SS);
   reader.PCD_Init();
   const byte version = reader.PCD_ReadRegister(MFRC522::VersionReg);

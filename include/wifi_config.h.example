@@ -1,6 +1,0 @@
-#pragma once
-
-// Copy this file to wifi_config.h and use your own local network credentials.
-#define RFID_WIFI_SSID "YOUR_WIFI_NAME"
-#define RFID_WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
-#define RFID_OTA_PASSWORD "CHOOSE_A_STRONG_OTA_PASSWORD"
