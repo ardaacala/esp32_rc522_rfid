@@ -110,6 +110,16 @@ void finishCard() {
   reader.PCD_StopCrypto1();
 }
 
+void initializeReader() {
+  // Force a hardware reset; a soft reset alone cannot recover a silent RC522.
+  pinMode(PIN_RST, OUTPUT);
+  digitalWrite(PIN_RST, LOW);
+  delay(2);
+  digitalWrite(PIN_RST, HIGH);
+  delay(50);
+  reader.PCD_Init();
+}
+
 bool validUtf8(const uint8_t *data, size_t length) {
   for (size_t i = 0; i < length;) {
     const uint8_t c = data[i];
@@ -523,13 +533,19 @@ void pollCard() {
 }
 
 void pollReader() {
-  if (readerReady) return;
   const unsigned long now = millis();
   if (now - lastReaderProbe < READER_PROBE_MS) return;
   lastReaderProbe = now;
-  const byte version = reader.PCD_ReadRegister(MFRC522::VersionReg);
-  if (version == 0x00 || version == 0xFF) return;
-  reader.PCD_Init();
+  if (readerReady) {
+    const byte version = reader.PCD_ReadRegister(MFRC522::VersionReg);
+    if (version != 0x00 && version != 0xFF) return;
+    readerReady = false;
+    pending = PendingOperation::None;
+    waitForCardRemoval = false;
+    console.println(F("RC522 bağlantısı kesildi; okuyucu yeniden başlatılıyor."));
+  }
+  // A late power-up may return 0xFF until the RC522 is initialized again.
+  initializeReader();
   const byte initializedVersion = reader.PCD_ReadRegister(MFRC522::VersionReg);
   readerReady = initializedVersion != 0x00 && initializedVersion != 0xFF;
   if (readerReady) {
@@ -547,7 +563,7 @@ void setup() {
   lastWifiAttempt = millis();
   if (!apReady) console.println(F("Wi-Fi ağı başlatılamadı; yeniden denenecek."));
   SPI.begin(18, 19, 23, PIN_SS);
-  reader.PCD_Init();
+  initializeReader();
   const byte version = reader.PCD_ReadRegister(MFRC522::VersionReg);
   readerReady = version != 0x00 && version != 0xFF;
   console.print(F("RC522 VersionReg: 0x"));
