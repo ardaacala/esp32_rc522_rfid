@@ -34,6 +34,8 @@ Açılışta `VersionReg` ve bağlantı durumu yazılır. `0x00` veya `0xFF` yan
 | `info` | Yaklaştırılan etiketin UID ve çip türünü gösterir. |
 | `write ADET METIN [ADET METIN...]` | En çok 8 metni sırayla yazar. Her aşama 1-65535 doğrulanmış yazma ister. Tek aşamada `ADET` 1 ise 5 saniye etiket bekler; diğer durumlarda bütün hedefler tamamlanana veya `cancel` verilene kadar yazma modunda kalır. |
 | `read` | 30 saniye etiket bekler ve kayıtlı metni gösterir. |
+| `read on` | Sürekli okuma açar. Her yeni etiketi okur; aynı etiket anten üzerinde kaldığı sürece çıktıyı tekrarlamaz. Zaman aşımı yoktur. |
+| `read off` | Sürekli okumayı kapatır. `help`, `info`, `read`, `write` veya başka bir komut da sürekli okumayı kapatır. |
 | `cancel` | Bekleyen etiket işlemini iptal eder. |
 
 Örnek:
@@ -56,6 +58,8 @@ Kayıtlı metin: SENARYO_01
 ```
 
 Sıralı yazma örneği: `write 2 ILK 3 IKINCI`. İlk metin iki farklı etikete doğrulanarak yazıldıktan sonra ikinci metnin üç etiketlik sayacı başlar. Boşluk ve sayı içeren bir metnin aşama ayırıcı sanılmaması için tırnak kullanın: `write 2 "Seri 1 A" 3 "Seri 2 B"`. Her metin en çok 43 UTF-8 byte olabilir. Aşamalar arasında aynı etiketin yeniden yazılmaması için etiketin UID'si ve mevcut kaydı kontrol edilir; yeni UID geldiğinde mekanik besleyici boş anten aralığı bırakmasa da sıradaki etiket işlenebilir.
+
+Kesintisiz okuma için `read on` yazın. Her yeni UID'nin kayıtlı metni görüntülenir. Aynı etiketi yeniden okutmak için anten alanından kısa süre uzaklaştırıp tekrar yaklaştırın. `read off` veya başka bir komutla bu modu kapatın. Tek seferlik `read` komutu 30 saniyelik bekleme davranışını korur.
 
 RC522 sürekli tarama yapar ve algıladığı etiketi seri monitörde gösterir. Etiketin yaklaşması tek başına yazma başlatmaz. `write 1 METIN` verildiğinde etiket zaten anten üzerindeyse de algılanır. Tekli yazmada başarılı veya hatalı kart denemesinden sonra komut temizlenir. Çoklu yazmada yalnızca geri okunup doğrulanan yazmalar sayılır; başarısız deneme veya bekleme yazma modunu kapatmaz. Her denemeden sonra mevcut etiketi uzaklaştırın ve sıradaki etiketi yaklaştırın. Etiketi anten üzerinde tutmak tekrar tekrar yazmaya yol açmaz. `cancel` ile işlemi iptal edebilirsiniz. Yeni bir komut mevcut yazma işlemini sonlandırır.
 

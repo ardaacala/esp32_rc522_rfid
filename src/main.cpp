@@ -61,7 +61,7 @@ MFRC522 reader(PIN_SS, PIN_RST);
 WiFiServer networkConsole(CONSOLE_PORT);
 MFRC522::MIFARE_Key defaultKey = {{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}};
 
-enum class PendingOperation { None, Info, Read, Write };
+enum class PendingOperation { None, Info, Read, ReadContinuous, Write };
 PendingOperation pending = PendingOperation::None;
 unsigned long pendingSince = 0;
 unsigned long lastCardPoll = 0;
@@ -171,6 +171,8 @@ void printHelp() {
   console.println(F("  write ADET METIN [ADET METIN...] - sırayla yaz (metin en çok 43 byte)"));
   console.println(F("  Örnek: write 2 ILK 3 IKINCI; sayı içeren metni tırnaklayın"));
   console.println(F("  read          - Kayıtlı metni oku"));
+  console.println(F("  read on       - Etiketleri durmadan oku"));
+  console.println(F("  read off      - Sürekli okumayı durdur"));
   console.println(F("  cancel        - Bekleyen işlemi iptal et"));
   console.println(F("  help          - Bu listeyi göster"));
 }
@@ -280,16 +282,15 @@ void startOperation(PendingOperation operation) {
   if (operation == PendingOperation::Write) {
     if (writeStepCount == 1 && writeTarget == 1) console.println(F("5 saniye boyunca yazılabilir etiket taranıyor..."));
     else console.println(F("Hedef sayıya ulaşılana kadar yazılabilir etiket taranıyor..."));
+  } else if (operation == PendingOperation::ReadContinuous) {
+    console.println(F("Sürekli okuma açık; durdurmak için read off veya başka bir komut yazın."));
   } else {
     console.println(F("Etiket taranıyor (30 saniye)."));
   }
 }
 
 void handleCommand(const char *command, size_t length) {
-  if (strcmp(command, "help") == 0) {
-    printHelp();
-    return;
-  }
+  const bool wasReadingContinuously = pending == PendingOperation::ReadContinuous;
   if (strcmp(command, "cancel") == 0) {
     pending = PendingOperation::None;
     waitForCardRemoval = false;
@@ -299,6 +300,14 @@ void handleCommand(const char *command, size_t length) {
   // Yeni bir komut eski bekleyen yazmayı yanlışlıkla sürdürmemeli.
   pending = PendingOperation::None;
   waitForCardRemoval = false;
+  if (strcmp(command, "read off") == 0) {
+    console.println(wasReadingContinuously ? F("Sürekli okuma kapatıldı.") : F("Sürekli okuma zaten kapalı."));
+    return;
+  }
+  if (strcmp(command, "help") == 0) {
+    printHelp();
+    return;
+  }
   if (!readerReady) {
     console.println(F("Hata: RC522 bağlantısı hazır değil. Bağlantıları kontrol edin; modül her saniye yeniden yoklanıyor."));
     return;
@@ -307,6 +316,9 @@ void handleCommand(const char *command, size_t length) {
     startOperation(PendingOperation::Info);
   } else if (strcmp(command, "read") == 0) {
     startOperation(PendingOperation::Read);
+  } else if (strcmp(command, "read on") == 0) {
+    lastUidSize = 0;  // Anten üzerinde zaten duran etiketi de ilk kez oku.
+    startOperation(PendingOperation::ReadContinuous);
   } else if (strncmp(command, "write ", 6) == 0) {
     if (!parseWriteSteps(command, length)) return;
     activateWriteStep(0);
@@ -542,6 +554,7 @@ void pollCard() {
   const bool singleWrite = pending == PendingOperation::Write && writeStepCount == 1 && writeTarget == 1;
   const unsigned long timeout = singleWrite ? WRITE_WAIT_TIMEOUT_MS : WAIT_TIMEOUT_MS;
   if (pending != PendingOperation::None &&
+      pending != PendingOperation::ReadContinuous &&
       (pending != PendingOperation::Write || singleWrite) && now - pendingSince >= timeout) {
     const bool wasWrite = pending == PendingOperation::Write;
     pending = PendingOperation::None;
@@ -587,6 +600,10 @@ void pollCard() {
   const PendingOperation operation = pending;
   const bool alreadyShown = rememberCard(now);
   const MFRC522::PICC_Type type = reader.PICC_GetType(reader.uid.sak);
+  if (operation == PendingOperation::ReadContinuous && alreadyShown) {
+    finishCard();
+    return;
+  }
   if (operation == PendingOperation::None) {
     if (!alreadyShown) {
       console.println(F("Etiket algılandı; yazma için write ADET METIN komutu verin."));
@@ -596,7 +613,7 @@ void pollCard() {
     return;
   }
 
-  if (operation != PendingOperation::Write || singleWrite) {
+  if ((operation != PendingOperation::Write && operation != PendingOperation::ReadContinuous) || singleWrite) {
     pending = PendingOperation::None;
   } else {
     // Aynı kart anten üzerinde kaldığı sürece ikinci kez yazma.
@@ -608,7 +625,7 @@ void pollCard() {
   } else if (!supportedType(type)) {
     console.println(F("Bu etiket türü desteklenmiyor; okuma/yazma reddedildi."));
   } else if (!classicType(type) || authenticateSector()) {
-    if (operation == PendingOperation::Read) readText(type);
+    if (operation == PendingOperation::Read || operation == PendingOperation::ReadContinuous) readText(type);
     else if (writeText(type)) {
       ++writeCompleted;
       console.print(F("İlerleme: "));
