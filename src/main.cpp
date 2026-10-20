@@ -46,7 +46,8 @@ constexpr uint8_t PIN_RST = 22;
 constexpr uint8_t DATA_BLOCKS[] = {4, 5, 6};
 constexpr size_t RECORD_SIZE = 48;
 constexpr size_t MAX_TEXT_BYTES = 43;
-constexpr size_t COMMAND_BUFFER_SIZE = 128;
+constexpr size_t COMMAND_BUFFER_SIZE = 512;
+constexpr size_t MAX_WRITE_STEPS = 8;
 constexpr unsigned long WAIT_TIMEOUT_MS = 30000;
 constexpr unsigned long WRITE_WAIT_TIMEOUT_MS = 5000;
 constexpr unsigned long CARD_POLL_MS = 50;
@@ -74,6 +75,14 @@ uint8_t textToWrite[MAX_TEXT_BYTES];
 uint8_t textLength = 0;
 uint16_t writeTarget = 1;
 uint16_t writeCompleted = 0;
+struct WriteStep {
+  uint16_t target;
+  uint8_t length;
+  uint8_t text[MAX_TEXT_BYTES];
+};
+WriteStep writeSteps[MAX_WRITE_STEPS];
+size_t writeStepCount = 0;
+size_t writeStepIndex = 0;
 uint8_t lastWrittenText[MAX_TEXT_BYTES];
 uint8_t lastWrittenLength = 0;
 bool hasLastWrittenText = false;
@@ -159,10 +168,107 @@ bool validUtf8(const uint8_t *data, size_t length) {
 void printHelp() {
   console.println(F("Komutlar:"));
   console.println(F("  info          - Etiketin UID ve türünü göster"));
-  console.println(F("  write ADET METIN - 1-65535 kez, en çok 43 UTF-8 byte yaz"));
+  console.println(F("  write ADET METIN [ADET METIN...] - sırayla yaz (metin en çok 43 byte)"));
+  console.println(F("  Örnek: write 2 ILK 3 IKINCI; sayı içeren metni tırnaklayın"));
   console.println(F("  read          - Kayıtlı metni oku"));
   console.println(F("  cancel        - Bekleyen işlemi iptal et"));
   console.println(F("  help          - Bu listeyi göster"));
+}
+
+bool parseWriteSteps(const char *command, size_t length) {
+  writeStepCount = 0;
+  size_t position = 6;
+  while (position < length) {
+    if (writeStepCount == MAX_WRITE_STEPS) {
+      console.println(F("Hata: En çok 8 yazma aşaması verilebilir."));
+      return false;
+    }
+    uint16_t count = 0;
+    const size_t countStart = position;
+    while (position < length && command[position] >= '0' && command[position] <= '9') {
+      const uint8_t digit = command[position] - '0';
+      if (count > (UINT16_MAX - digit) / 10) {
+        console.println(F("Hata: Adet 1-65535 arasında olmalı."));
+        return false;
+      }
+      count = count * 10 + digit;
+      ++position;
+    }
+    if (position == countStart || count == 0 || position >= length || command[position] != ' ') {
+      console.println(F("Hata: Kullanım write ADET METIN [ADET METIN...] (adet 1-65535)."));
+      return false;
+    }
+    ++position;
+    const bool quoted = position < length && command[position] == '"';
+    if (quoted) ++position;
+    const size_t textStart = position;
+    size_t textEnd = length;
+    size_t nextCount = length;
+    if (quoted) {
+      while (position < length && command[position] != '"') ++position;
+      if (position == length) {
+        console.println(F("Hata: Metnin kapanış tırnağı eksik."));
+        return false;
+      }
+      textEnd = position++;
+      if (position < length) {
+        if (command[position] != ' ') {
+          console.println(F("Hata: Tırnaklı metinden sonra boşluk ve adet gelmeli."));
+          return false;
+        }
+        nextCount = position + 1;
+        if (nextCount == length) {
+          console.println(F("Hata: Sonraki aşamanın adedi eksik."));
+          return false;
+        }
+      }
+    } else {
+      for (size_t i = position; i + 2 < length; ++i) {
+        if (command[i] != ' ' || command[i + 1] < '0' || command[i + 1] > '9') continue;
+        size_t digitsEnd = i + 1;
+        while (digitsEnd < length && command[digitsEnd] >= '0' && command[digitsEnd] <= '9') ++digitsEnd;
+        if (digitsEnd < length && command[digitsEnd] == ' ') {
+          textEnd = i;
+          nextCount = i + 1;
+          break;
+        }
+      }
+    }
+    const size_t size = textEnd - textStart;
+    if (size == 0) {
+      console.println(F("Hata: Yazılacak metin boş olamaz."));
+      return false;
+    }
+    if (size > MAX_TEXT_BYTES) {
+      console.println(F("Hata: Metin 43 UTF-8 byte sınırını aşıyor; hiçbir byte kesilmedi."));
+      return false;
+    }
+    if (!validUtf8(reinterpret_cast<const uint8_t *>(command + textStart), size)) {
+      console.println(F("Hata: Metin geçerli UTF-8 değil veya NUL içeriyor."));
+      return false;
+    }
+    WriteStep &step = writeSteps[writeStepCount++];
+    step.target = count;
+    step.length = static_cast<uint8_t>(size);
+    memcpy(step.text, command + textStart, size);
+    position = nextCount;
+  }
+  return writeStepCount > 0;
+}
+
+void activateWriteStep(size_t index) {
+  writeStepIndex = index;
+  const WriteStep &step = writeSteps[index];
+  memcpy(textToWrite, step.text, step.length);
+  textLength = step.length;
+  writeTarget = step.target;
+  writeCompleted = 0;
+  console.print(F("Yazma aşaması "));
+  console.print(index + 1);
+  console.print('/');
+  console.print(writeStepCount);
+  console.print(F("; hedef: "));
+  console.println(writeTarget);
 }
 
 void startOperation(PendingOperation operation) {
@@ -172,7 +278,7 @@ void startOperation(PendingOperation operation) {
   lastScanErrorAt = pendingSince - 1000;
   waitForCardRemoval = false;
   if (operation == PendingOperation::Write) {
-    if (writeTarget == 1) console.println(F("5 saniye boyunca yazılabilir etiket taranıyor..."));
+    if (writeStepCount == 1 && writeTarget == 1) console.println(F("5 saniye boyunca yazılabilir etiket taranıyor..."));
     else console.println(F("Hedef sayıya ulaşılana kadar yazılabilir etiket taranıyor..."));
   } else {
     console.println(F("Etiket taranıyor (30 saniye)."));
@@ -202,39 +308,8 @@ void handleCommand(const char *command, size_t length) {
   } else if (strcmp(command, "read") == 0) {
     startOperation(PendingOperation::Read);
   } else if (strncmp(command, "write ", 6) == 0) {
-    size_t textStart = 6;
-    uint16_t count = 0;
-    while (textStart < length && command[textStart] >= '0' && command[textStart] <= '9') {
-      const uint8_t digit = command[textStart] - '0';
-      if (count > (UINT16_MAX - digit) / 10) {
-        console.println(F("Hata: Adet 1-65535 arasında olmalı."));
-        return;
-      }
-      count = count * 10 + digit;
-      ++textStart;
-    }
-    if (count == 0 || textStart >= length || command[textStart] != ' ') {
-      console.println(F("Hata: Kullanım write ADET METIN (adet 1-65535)."));
-      return;
-    }
-    ++textStart;
-    const size_t size = length - textStart;
-    if (size == 0) {
-      console.println(F("Hata: Yazılacak metin boş olamaz."));
-      return;
-    }
-    if (size > MAX_TEXT_BYTES) {
-      console.println(F("Hata: Metin 43 UTF-8 byte sınırını aşıyor; hiçbir byte kesilmedi."));
-      return;
-    }
-    if (!validUtf8(reinterpret_cast<const uint8_t *>(command + textStart), size)) {
-      console.println(F("Hata: Metin geçerli UTF-8 değil veya NUL içeriyor."));
-      return;
-    }
-    memcpy(textToWrite, command + textStart, size);
-    textLength = static_cast<uint8_t>(size);
-    writeTarget = count;
-    writeCompleted = 0;
+    if (!parseWriteSteps(command, length)) return;
+    activateWriteStep(0);
     console.println(F("Uyarı: Classic blok 4-6 veya Ultralight sayfa 4-15 üzerine yazılacak."));
     startOperation(PendingOperation::Write);
   } else {
@@ -464,7 +539,7 @@ void pollNetwork() {
 
 void pollCard() {
   const unsigned long now = millis();
-  const bool singleWrite = pending == PendingOperation::Write && writeTarget == 1;
+  const bool singleWrite = pending == PendingOperation::Write && writeStepCount == 1 && writeTarget == 1;
   const unsigned long timeout = singleWrite ? WRITE_WAIT_TIMEOUT_MS : WAIT_TIMEOUT_MS;
   if (pending != PendingOperation::None &&
       (pending != PendingOperation::Write || singleWrite) && now - pendingSince >= timeout) {
@@ -500,8 +575,13 @@ void pollCard() {
   }
 
   if (pending == PendingOperation::Write && waitForCardRemoval) {
-    finishCard();
-    return;
+    // A mechanical feeder may replace a tag without an empty antenna interval.
+    if (reader.uid.size == lastUidSize &&
+        memcmp(reader.uid.uidByte, lastUid, lastUidSize) == 0) {
+      finishCard();
+      return;
+    }
+    waitForCardRemoval = false;
   }
 
   const PendingOperation operation = pending;
@@ -516,7 +596,7 @@ void pollCard() {
     return;
   }
 
-  if (operation != PendingOperation::Write || writeTarget == 1) {
+  if (operation != PendingOperation::Write || singleWrite) {
     pending = PendingOperation::None;
   } else {
     // Aynı kart anten üzerinde kaldığı sürece ikinci kez yazma.
@@ -536,9 +616,14 @@ void pollCard() {
       console.print('/');
       console.println(writeTarget);
       if (writeCompleted == writeTarget) {
-        pending = PendingOperation::None;
-        waitForCardRemoval = false;
-        console.println(F("Hedef tamamlandı; yazma modu kapatıldı."));
+        if (writeStepIndex + 1 < writeStepCount) {
+          console.println(F("Aşama tamamlandı; sıradaki metne geçiliyor."));
+          activateWriteStep(writeStepIndex + 1);
+        } else {
+          pending = PendingOperation::None;
+          waitForCardRemoval = false;
+          console.println(F("Hedef tamamlandı; yazma modu kapatıldı."));
+        }
       }
     }
   }
