@@ -102,11 +102,8 @@ void printStatus(const char *action, MFRC522::StatusCode status) {
 }
 
 void finishCard() {
-  // Seçilmiş kartı durdur; şifrelemeyi sonraki kart için kapat.
-  const MFRC522::StatusCode status = reader.PICC_HaltA();
-  if (status != MFRC522::STATUS_OK) {
-    printStatus("Kart durdurulamadı", status);
-  }
+  // A moving tag can answer HALT or leave the field mid-command. This is best effort.
+  reader.PICC_HaltA();
   reader.PCD_StopCrypto1();
 }
 
@@ -238,7 +235,7 @@ void handleCommand(const char *command, size_t length) {
     textLength = static_cast<uint8_t>(size);
     writeTarget = count;
     writeCompleted = 0;
-    console.println(F("Uyarı: Etiketteki sektör 1 veri blokları 4, 5 ve 6 üzerine yazılacak."));
+    console.println(F("Uyarı: Classic blok 4-6 veya Ultralight sayfa 4-15 üzerine yazılacak."));
     startOperation(PendingOperation::Write);
   } else {
     console.println(F("Bilinmeyen komut. Liste için help yazın."));
@@ -275,6 +272,10 @@ bool classicType(MFRC522::PICC_Type type) {
          type == MFRC522::PICC_TYPE_MIFARE_4K;
 }
 
+bool supportedType(MFRC522::PICC_Type type) {
+  return classicType(type) || type == MFRC522::PICC_TYPE_MIFARE_UL;
+}
+
 void printCardInfo(MFRC522::PICC_Type type) {
   console.print(F("UID: "));
   for (byte i = 0; i < reader.uid.size; ++i) {
@@ -289,8 +290,7 @@ void printCardInfo(MFRC522::PICC_Type type) {
 
 bool rememberCard(unsigned long now) {
   const bool alreadyShown = reader.uid.size == lastUidSize &&
-      memcmp(reader.uid.uidByte, lastUid, lastUidSize) == 0 &&
-      now - lastSeenAt < SAME_CARD_GAP_MS;
+      memcmp(reader.uid.uidByte, lastUid, lastUidSize) == 0;
   lastUidSize = reader.uid.size;
   memcpy(lastUid, reader.uid.uidByte, lastUidSize);
   lastSeenAt = now;
@@ -307,21 +307,23 @@ bool authenticateSector() {
   return true;
 }
 
-bool readBlocks(uint8_t (&record)[RECORD_SIZE]) {
+bool readRecord(MFRC522::PICC_Type type, uint8_t (&record)[RECORD_SIZE]) {
   for (size_t i = 0; i < 3; ++i) {
     uint8_t buffer[18];  // 16 veri byte'ı + 2 CRC byte'ı
     byte bufferLength = sizeof(buffer);  // MIFARE_Read bu değeri değiştirir.
+    const byte address = type == MFRC522::PICC_TYPE_MIFARE_UL
+        ? static_cast<byte>(4 + i * 4) : DATA_BLOCKS[i];
     const MFRC522::StatusCode status = reader.MIFARE_Read(
-        DATA_BLOCKS[i], buffer, &bufferLength);
+        address, buffer, &bufferLength);
     if (status != MFRC522::STATUS_OK) {
-      console.print(F("Blok "));
-      console.print(DATA_BLOCKS[i]);
+      console.print(type == MFRC522::PICC_TYPE_MIFARE_UL ? F("Sayfa ") : F("Blok "));
+      console.print(address);
       printStatus(" okuma hatası", status);
       return false;
     }
     if (bufferLength < 16) {
-      console.print(F("Hata: Blok "));
-      console.print(DATA_BLOCKS[i]);
+      console.print(type == MFRC522::PICC_TYPE_MIFARE_UL ? F("Hata: Sayfa ") : F("Hata: Blok "));
+      console.print(address);
       console.println(F(" eksik okundu."));
       return false;
     }
@@ -330,7 +332,21 @@ bool readBlocks(uint8_t (&record)[RECORD_SIZE]) {
   return true;
 }
 
-bool writeBlocks(uint8_t (&record)[RECORD_SIZE]) {
+bool writeRecord(MFRC522::PICC_Type type, uint8_t (&record)[RECORD_SIZE]) {
+  if (type == MFRC522::PICC_TYPE_MIFARE_UL) {
+    for (size_t i = 0; i < 12; ++i) {
+      const byte page = static_cast<byte>(4 + i);
+      const MFRC522::StatusCode status = reader.MIFARE_Ultralight_Write(
+          page, record + i * 4, 4);
+      if (status != MFRC522::STATUS_OK) {
+        console.print(F("Sayfa "));
+        console.print(page);
+        printStatus(" yazma hatası", status);
+        return false;
+      }
+    }
+    return true;
+  }
   for (size_t i = 0; i < 3; ++i) {
     const MFRC522::StatusCode status = reader.MIFARE_Write(
         DATA_BLOCKS[i], record + i * 16, 16);
@@ -347,9 +363,9 @@ bool writeBlocks(uint8_t (&record)[RECORD_SIZE]) {
   return true;
 }
 
-void readText() {
+void readText(MFRC522::PICC_Type type) {
   uint8_t record[RECORD_SIZE];
-  if (!readBlocks(record)) {
+  if (!readRecord(type, record)) {
     console.println(F("Okuma tamamlanamadı."));
     return;
   }
@@ -369,14 +385,14 @@ void readText() {
   console.println();
 }
 
-bool writeText() {
+bool writeText(MFRC522::PICC_Type type) {
   uint8_t record[RECORD_SIZE] = {};
   memcpy(record, "TAG1", 4);
   record[4] = textLength;
   memcpy(record + 5, textToWrite, textLength);
 
   uint8_t existing[RECORD_SIZE];
-  if (!readBlocks(existing)) {
+  if (!readRecord(type, existing)) {
     console.println(F("Yazma öncesi okuma başarısız; güvenlik için bu etiket atlandı."));
     return false;
   }
@@ -392,13 +408,13 @@ bool writeText() {
   }
 
   console.println(F("Yazma başladı."));
-  if (!writeBlocks(record)) {
-    console.println(F("Yazma tamamlanamadı; bazı bloklar değişmiş olabilir."));
+  if (!writeRecord(type, record)) {
+    console.println(F("Yazma tamamlanamadı; bazı bloklar veya sayfalar değişmiş olabilir."));
     return false;
   }
   console.println(F("48 byte geri okunup doğrulanıyor..."));
   uint8_t verified[RECORD_SIZE];
-  if (!readBlocks(verified)) {
+  if (!readRecord(type, verified)) {
     console.println(F("Yazma sonrası doğrulama okunamadı; başarı bildirilmiyor."));
     return false;
   }
@@ -465,6 +481,7 @@ void pollCard() {
   byte atqaLength = sizeof(atqa);
   const MFRC522::StatusCode wakeStatus = reader.PICC_WakeupA(atqa, &atqaLength);
   if (wakeStatus == MFRC522::STATUS_TIMEOUT) {
+    if (now - lastSeenAt >= SAME_CARD_GAP_MS) lastUidSize = 0;
     waitForCardRemoval = false;
     return;  // Etiket yok.
   }
@@ -507,12 +524,12 @@ void pollCard() {
   }
   printCardInfo(type);
   if (operation == PendingOperation::Info) {
-    if (!classicType(type)) console.println(F("Bu etiket türü veri okuma/yazma için desteklenmiyor."));
-  } else if (!classicType(type)) {
+    if (!supportedType(type)) console.println(F("Bu etiket türü veri okuma/yazma için desteklenmiyor."));
+  } else if (!supportedType(type)) {
     console.println(F("Bu etiket türü desteklenmiyor; okuma/yazma reddedildi."));
-  } else if (authenticateSector()) {
-    if (operation == PendingOperation::Read) readText();
-    else if (writeText()) {
+  } else if (!classicType(type) || authenticateSector()) {
+    if (operation == PendingOperation::Read) readText(type);
+    else if (writeText(type)) {
       ++writeCompleted;
       console.print(F("İlerleme: "));
       console.print(writeCompleted);

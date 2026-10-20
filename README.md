@@ -1,6 +1,6 @@
 # ESP32 ve RC522 ile USB seri RFID okuma/yazma
 
-Bu bağımsız PlatformIO projesi ESP32-WROOM-32 (`esp32dev`) ve HW-868 Mini RFID RC522 ile çalışır. Telefon veya Wi-Fi gerekmez. Yalnızca **MIFARE Classic Mini, 1K ve 4K** etiketlerin sektör 1 veri blokları (4, 5, 6) için okuma ve yazma yapar.
+Bu bağımsız PlatformIO projesi ESP32-WROOM-32 (`esp32dev`) ve HW-868 Mini RFID RC522 ile çalışır. **MIFARE Classic Mini, 1K ve 4K** etiketlerin sektör 1 veri bloklarını (4, 5, 6) ve **MIFARE Ultralight / Ultralight C** etiketlerin kullanıcı sayfalarını (4-15) okur ve yazar. ESP kendi şifresiz Wi-Fi ağını yayınlar; telefon veya harici Wi-Fi ağı gerekmez.
 
 ## Bağlantılar
 
@@ -40,7 +40,7 @@ Açılışta `VersionReg` ve bağlantı durumu yazılır. `0x00` veya `0xFF` yan
 
 ```text
 write 2 SENARYO_01
-Uyarı: Etiketteki sektör 1 veri blokları 4, 5 ve 6 üzerine yazılacak.
+Uyarı: Classic blok 4-6 veya Ultralight sayfa 4-15 üzerine yazılacak.
 Hedef sayıya ulaşılana kadar yazılabilir etiket taranıyor...
 ...etiketi yaklaştırın...
 Yazma doğrulandı.
@@ -61,13 +61,13 @@ SPI hızı, kablo kaynaklı iletişim sorunlarını azaltmak için 1 MHz olarak 
 
 ## Veri düzeni ve sınırlar
 
-Blok 4, 5 ve 6 toplam 48 byte tutar: `TAG1` imzası (4 byte), UTF-8 byte uzunluğu (1 byte), en çok 43 byte metin ve sıfır dolgusu. Türkçe karakterler birden fazla byte kullanabilir. Sınırı aşan veya geçersiz UTF-8 içeren komut kesilmeden reddedilir. Okurken imza, uzunluk ve UTF-8 doğrulanır.
+Classic blok 4-6 veya Ultralight sayfa 4-15 toplam 48 byte tutar: `TAG1` imzası (4 byte), UTF-8 byte uzunluğu (1 byte), en çok 43 byte metin ve sıfır dolgusu. Türkçe karakterler birden fazla byte kullanabilir. Sınırı aşan veya geçersiz UTF-8 içeren komut kesilmeden reddedilir. Okurken imza, uzunluk ve UTF-8 doğrulanır. Ultralight'ta sayfa 0-3 (UID, kilit bitleri ve OTP) değiştirilmez. Bu 48 byte'lık alanın önceki NDEF veya başka uygulama verisi yazma sırasında değişir.
 
-Yazma sonrası üç blok geri okunur ve 48 byte'ın tümü karşılaştırılır. Eşleşme olmadan başarı mesajı verilmez. Yalnızca varsayılan Key A (`FF FF FF FF FF FF`) denenir; kimlik doğrulama başarısızsa işlem hata ile biter. Blok 0, sektör trailer bloğu 7, UID, anahtarlar ve erişim bitleri değiştirilmez. Desteklenmeyen çip türlerinde bilgi gösterilir ve yazma reddedilir. Kısmi yazma hatasında bazı veri blokları değişmiş olabilir; yeniden `read` ile denetleyin.
+Yazma sonrası 48 byte geri okunup karşılaştırılır. Eşleşme olmadan başarı mesajı verilmez. Classic için yalnızca varsayılan Key A (`FF FF FF FF FF FF`) denenir; kimlik doğrulama başarısızsa işlem hata ile biter. Classic blok 0, sektör trailer bloğu 7, UID, anahtarlar ve erişim bitleri değiştirilmez. Ultralight için Classic kimlik doğrulaması uygulanmaz; kilitli veya korumalı sayfalarda yazma reddedilebilir. Desteklenmeyen çip türlerinde bilgi gösterilir ve yazma reddedilir. Kısmi yazma hatasında bazı veri blokları veya sayfalar değişmiş olabilir; yeniden `read` ile denetleyin.
 
 ## Çoklu yazmada ön okuma
 
-Her yazma denemesinden hemen önce etiketin 4, 5 ve 6 numaralı blokları okunur. Okuma başarısızsa güvenlik için yazma yapılmaz. Etiketteki `TAG1` metni, yazılacak metinle veya bu çalışmada en son başarıyla yazılmış metinle aynıysa etiket atlanır. Atlanan etiket hedef sayıya eklenmez. Böylece mekanik besleyici daha önce işlenmiş bir etiketi yeniden antene getirse bile içerik değiştirilmez. Farklı içerikli etiketler normal yazma akışına devam eder.
+Her yazma denemesinden hemen önce Classic blok 4-6 veya Ultralight sayfa 4-15 okunur. Okuma başarısızsa güvenlik için yazma yapılmaz. Etiketteki `TAG1` metni, yazılacak metinle veya bu çalışmada en son başarıyla yazılmış metinle aynıysa etiket atlanır. Atlanan etiket hedef sayıya eklenmez. Böylece mekanik besleyici daha önce işlenmiş bir etiketi yeniden antene getirse bile içerik değiştirilmez. Farklı içerikli etiketler normal yazma akışına devam eder.
 
 ## ESP'nin kendi Wi-Fi ağı, ağ konsolu ve OTA
 
